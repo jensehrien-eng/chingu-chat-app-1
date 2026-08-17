@@ -1,13 +1,32 @@
 import os
+import sys
 import uuid
+import shutil
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from fireredtts3.models import FireRedTTS3
 
-print("Booting instruct voice engine on CPU...")
-# This tells the server to load the description-capable variant
-model = FireRedTTS3.from_pretrained("FireRedTeam/FireRedTTS3", variant="fireredtts3_instruct")
+# 1. Automate official Quick Start file structural download
+if not os.path.exists("FireRedTTS3-main"):
+    print("Step A: Downloading FireRedTTS3 source code folder...")
+    os.system("curl -L https://github.com -o repo.zip")
+    os.system("unzip -q repo.zip")
+    # Move the library directory directly to root
+    shutil.copytree("FireRedTTS3-main/fireredtts3", "./fireredtts3", dirs_exist_ok=True)
+
+# 2. Automate official Model Download CLI instruction
+if not os.path.exists("pretrained_models"):
+    print("Step B: Fetching model weights from Hugging Face repository...")
+    os.system("huggingface-cli download FireRedTeam/FireRedTTS3 --local-dir pretrained_models/")
+
+# Add current active working directory to Python system engine path routing
+sys.path.append(os.path.abspath("."))
+
+from fireredtts3.core import FireRedTTS3Instruct
+
+print("Step C: Booting Korean instruct voice engine on CPU...")
+# Initialize the model weights exactly out of the folder target
+model = FireRedTTS3Instruct("pretrained_models", use_wetext=True, use_llm_tn=False)
 print("Instruct engine ready!")
 
 app = FastAPI()
@@ -27,12 +46,16 @@ def generate_voice(request: DesignRequest):
         
     unique_filename = f"chat_msg_{uuid.uuid4().hex}.mp3"
     
-    # This runs the voice design algorithm using your description text
-    model.design_voice(
-        text=request.text,
+    # Run the official Voice Design calculation
+    gen_audio, gen_audio_sr, _ = model.generate_voice_design(
         instruction=request.instruction,
-        output_path=unique_filename,
-        language="ko" 
+        text=request.text,
+        language="ko"
     )
     
+    # Save internal audio vectors to file output
+    import torchaudio
+    torchaudio.save(unique_filename, gen_audio.cpu(), gen_audio_sr)
+    
     return FileResponse(unique_filename, media_type="audio/mpeg", filename=unique_filename)
+
