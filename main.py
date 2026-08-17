@@ -1,58 +1,86 @@
+import json
 import uuid
-import requests
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
+import urllib.request
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-app = FastAPI()
+class GatewayHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        # Basic health-check verification door
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        response = {"status": "Korean Voice Gateway is online and active!"}
+        self.wfile.write(json.dumps(response).encode('utf-8'))
 
-class DesignRequest(BaseModel):
-    text: str          
-    instruction: str   
-
-@app.get("/")
-def home_check():
-    return {"status": "Korean Voice Gateway is live and healthy!"}
-
-@app.post("/generate_voice")
-def generate_voice(request: DesignRequest):
-    if not request.text.strip():
-        raise HTTPException(status_code=400, detail="Text cannot be empty")
-        
-    unique_filename = f"chat_msg_{uuid.uuid4().hex}.mp3"
-    
-    # Connect directly to the optimized public FireRedTTS3 cluster engine
-    hf_api_url = "https://hf.space"
-    
-    # Exact structure requested by the official Instruct platform
-    payload = {
-        "data": [
-            request.instruction,  # Voice style instructions
-            request.text,         # Speaking text characters
-            "ko",                 # Korean Language tag token
-            0.7,                  # Sampling temperature
-            0.8,                  # top_p
-            20,                   # top_k
-            1.0                   # Repetition penalty
-        ]
-    }
-    
-    try:
-        # Route your phone payload straight up to the cluster machines
-        response = requests.post(hf_api_url, json=payload, timeout=60)
-        if response.status_code != 200:
-            raise HTTPException(status_code=500, detail="Voice cluster processing failed")
+    def do_POST(self):
+        if self.path == '/generate_voice':
+            # 1. Read incoming data payload length from the Android phone
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            request_json = json.loads(post_data.decode('utf-8'))
             
-        # Extract the temporary audio file download url from the cluster response
-        audio_url = response.json()["data"][0]["url"]
-        
-        # Pull down the raw binary audio and store it temporarily on Render
-        audio_data = requests.get(audio_url, stream=True)
-        with open(unique_filename, 'wb') as f:
-            for chunk in audio_data.iter_content(chunk_size=4096):
-                f.write(chunk)
+            text = request_json.get("text", "")
+            instruction = request_json.get("instruction", "")
+            
+            # Basic character confirmation validation
+            if not text.strip():
+                self.send_response(400)
+                self.end_headers()
+                return
+
+            unique_filename = f"chat_msg_{uuid.uuid4().hex}.mp3"
+            
+            # 2. Formulate payload schema matching the optimized FireRedTTS3 cluster
+            hf_payload = {
+                "data": [
+                    instruction,  # Voice identity instructions
+                    text,         # Target speech text string
+                    "ko",         # Korean language configuration tag
+                    0.7,          # Text sampling temperature
+                    0.8,          # top_p
+                    20,           # top_k
+                    1.0           # Token repetition penalties
+                ]
+            }
+            
+            try:
+                # 3. Stream data package directly into the AI nodes over the web
+                hf_url = "https://hf.space"
+                req = urllib.request.Request(
+                    hf_url, 
+                    data=json.dumps(hf_payload).encode('utf-8'),
+                    headers={'Content-Type': 'application/json'}
+                )
                 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Proxy connection loss: {str(e)}")
-        
-    return FileResponse(unique_filename, media_type="audio/mpeg", filename=unique_filename)
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    hf_data = json.loads(response.read().decode('utf-8'))
+                    audio_url = hf_data["data"]["url"]
+                
+                # 4. Pull down the raw binary file chunk locally to Render storage
+                urllib.request.urlretrieve(audio_url, unique_filename)
+                
+                # 5. Transmission route: Ship the final file stream straight to Android
+                self.send_response(200)
+                self.send_header('Content-Type', 'audio/mpeg')
+                self.send_header('Content-Disposition', f'attachment; filename="{unique_filename}"')
+                self.end_headers()
+                
+                with open(unique_filename, 'rb') as f:
+                    self.wfile.write(f.read())
+                    
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode('utf-8'))
+
+# Server ignition execution sequence configuration
+def run(port=8000):
+    server_address = ('', port)
+    httpd = HTTPServer(server_address, GatewayHandler)
+    print(f"Server ignited on port {port}...")
+    httpd.serve_forever()
+
+if __name__ == '__main__':
+    import os
+    port_number = int(os.environ.get("PORT", 8000))
+    run(port=port_number)
